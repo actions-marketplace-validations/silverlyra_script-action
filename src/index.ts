@@ -1,13 +1,16 @@
-import {readFile} from 'fs/promises'
+import * as fs from 'fs/promises'
+import path from 'path'
 import fetch from 'node-fetch'
-import 'node-get-random-values/phonyfill'
 
 import * as artifact from '@actions/artifact'
 import * as core from '@actions/core'
 import * as exec from '@actions/exec'
-import {getOctokit} from '@actions/github'
 import * as glob from '@actions/glob'
 import * as io from '@actions/io'
+import chalk from 'chalk'
+
+import {readEvent} from './event'
+import {Github} from './github'
 
 export {core, exec, glob, io}
 
@@ -30,7 +33,7 @@ export async function run<T extends Unknown = Unknown>(
   }
 
   if (scriptInputType(script) === 'path') {
-    script = await readFile(script, 'utf-8')
+    script = await fs.readFile(script, 'utf-8')
   }
 
   try {
@@ -81,12 +84,18 @@ export function defaultContext(githubToken?: string): DefaultContext {
   const input =
     inputEncoding === 'json' ? JSON.parse(inputRaw || 'null') : inputRaw
 
-  const github = githubToken ? getOctokit(githubToken) : null
+  const github = githubToken ? new Github({auth: `token ${githubToken}`}) : null
+
+  if (process.env.GITHUB_ACTIONS) chalk.level = 2
 
   return {
     input,
     env: process.env,
     shell,
+
+    fs,
+    path,
+    chalk,
 
     core,
     exec,
@@ -95,6 +104,7 @@ export function defaultContext(githubToken?: string): DefaultContext {
     artifact,
     github,
     glob,
+    readEvent,
     io
   }
 }
@@ -104,46 +114,43 @@ export interface DefaultContext {
   env: typeof process.env
   shell: typeof shell
 
+  fs: typeof fs
+  path: typeof path
+  chalk: typeof chalk
+
   core: typeof core
   exec: typeof exec
   fetch: typeof fetch
 
   artifact: typeof artifact
-  github: ReturnType<typeof getOctokit> | null
+  github: Github | null
   glob: typeof glob
+  readEvent: typeof readEvent
   io: typeof io
 }
 
 export function shell(
-  command: string,
+  command: string | string[],
   options?: exec.ExecOptions
 ): Promise<number>
 export function shell(
-  command: string,
-  args: string[],
-  options?: exec.ExecOptions
-): Promise<number>
-export function shell(
-  command: string,
+  command: string | string[],
   options: {capture: true} & exec.ExecOptions
 ): Promise<exec.ExecOutput>
-export function shell(
-  command: string,
-  args: string[],
-  options: {capture: true} & exec.ExecOptions
-): Promise<exec.ExecOutput>
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function shell(command: string, ...argv: any[]): Promise<any> {
-  const args: string[] | undefined = Array.isArray(argv[0])
-    ? argv.shift()
+export async function shell(
+  command: string | string[],
+  options?: {capture?: true} & exec.ExecOptions
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any> {
+  const cmd = Array.isArray(command) ? command[0] : command
+  const args: string[] | undefined = Array.isArray(command)
+    ? command.slice(1)
     : undefined
-  const options: ({capture?: boolean} & exec.ExecOptions) | undefined =
-    argv[0] && typeof argv[0] === 'object' ? argv.shift() : undefined
   const capture = !!options?.capture
 
   return capture
-    ? exec.getExecOutput(command, args, options)
-    : exec.exec(command, args, options)
+    ? exec.getExecOutput(cmd, args, options)
+    : exec.exec(cmd, args, options)
 }
 
 export function scriptInputType(script: string): 'inline' | 'path' {
